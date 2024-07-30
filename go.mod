@@ -1,4 +1,4 @@
-module producer
+module github.com/Lux-N-Sal/autro-price
 
 go 1.22.0
 
