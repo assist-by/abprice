@@ -7,6 +7,6 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -o autro-price
+RUN go build -o main
 
-CMD ["./autro-price"]
+CMD ["./main"]
