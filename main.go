@@ -81,7 +81,7 @@ func fetchBTCCandleData() ([]CandleData, error) {
 	return candles, nil
 }
 
-func produceToKafka(writer *kafka.Writer, candles []CandleData) error {
+func writeToKafka(writer *kafka.Writer, candles []CandleData) error {
 	jsonData, err := json.Marshal(candles)
 	if err != nil {
 		return err
@@ -94,7 +94,7 @@ func produceToKafka(writer *kafka.Writer, candles []CandleData) error {
 	return err
 }
 
-func connectProducer() *kafka.Writer {
+func createWriter() *kafka.Writer {
 	return kafka.NewWriter(
 		kafka.WriterConfig{
 			Brokers:     []string{kafkaBroker},
@@ -113,8 +113,8 @@ func utcToLocal(utcTime time.Time) time.Time {
 }
 
 func main() {
-	producer := connectProducer()
-	defer producer.Close()
+	writer := createWriter()
+	defer writer.Close()
 
 	ticker := time.NewTicker(fetchInterval)
 	defer ticker.Stop()
@@ -131,7 +131,7 @@ func main() {
 				continue
 			}
 
-			err = produceToKafka(producer, candles)
+			err = writeToKafka(writer, candles)
 			if err != nil {
 				fmt.Printf("Error producing to Kafka: %v\n", err)
 			} else {
