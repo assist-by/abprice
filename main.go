@@ -15,7 +15,6 @@ import (
 
 const (
 	binanceKlineAPI = "https://api.binance.com/api/v3/klines"
-	kafkaTopic      = "btcusdt-1m-candles"
 	maxRetries      = 5
 	retryDelay      = 5 * time.Second
 	fetchInterval   = 1 * time.Minute
@@ -34,11 +33,16 @@ type CandleData struct {
 }
 
 var kafkaBroker string
+var kafkaTopic string
 
 func init() {
 	kafkaBroker = os.Getenv("KAFKA_BROKER")
 	if kafkaBroker == "" {
 		kafkaBroker = "kafka:9092" // 기본값 설정
+	}
+	kafkaTopic = os.Getenv("KAFKA_TOPIC")
+	if kafkaTopic == "" {
+		kafkaTopic = "price-to-signal" // 기본값 설정
 	}
 }
 
