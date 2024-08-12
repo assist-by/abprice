@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +10,7 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/IBM/sarama"
+	"github.com/segmentio/kafka-go"
 )
 
 const (
@@ -37,7 +38,7 @@ var kafkaBroker string
 func init() {
 	kafkaBroker = os.Getenv("KAFKA_BROKER")
 	if kafkaBroker == "" {
-		kafkaBroker = "localhost:29092" // 기본값 설정
+		kafkaBroker = "kafka:9092" // 기본값 설정
 	}
 }
 
@@ -76,34 +77,26 @@ func fetchBTCCandleData() ([]CandleData, error) {
 	return candles, nil
 }
 
-func produceToKafka(producer sarama.SyncProducer, candles []CandleData) error {
+func produceToKafka(writer *kafka.Writer, candles []CandleData) error {
 	jsonData, err := json.Marshal(candles)
 	if err != nil {
 		return err
 	}
 
-	msg := &sarama.ProducerMessage{
-		Topic: kafkaTopic,
-		Value: sarama.StringEncoder(jsonData),
-	}
+	err = writer.WriteMessages(context.Background(), kafka.Message{
+		Value: jsonData,
+	})
 
-	_, _, err = producer.SendMessage(msg)
 	return err
 }
 
-func connectProducer(brokers []string) (sarama.SyncProducer, error) {
-	config := sarama.NewConfig()
-	config.Producer.Return.Successes = true
-
-	for i := 0; i < maxRetries; i++ {
-		producer, err := sarama.NewSyncProducer(brokers, config)
-		if err == nil {
-			return producer, nil
-		}
-		fmt.Printf("Failed to connect to Kafka, retrying in %v... (attempt %d/%d)\n", retryDelay, i+1, maxRetries)
-		time.Sleep(retryDelay)
-	}
-	return nil, fmt.Errorf("failed to connect to Kafka after %d attempts", maxRetries)
+func connectProducer() *kafka.Writer {
+	return kafka.NewWriter(
+		kafka.WriterConfig{
+			Brokers:     []string{kafkaBroker},
+			Topic:       kafkaTopic,
+			MaxAttempts: 5,
+		})
 }
 
 func utcToLocal(utcTime time.Time) time.Time {
@@ -116,10 +109,7 @@ func utcToLocal(utcTime time.Time) time.Time {
 }
 
 func main() {
-	producer, err := connectProducer([]string{kafkaBroker})
-	if err != nil {
-		panic(err)
-	}
+	producer := connectProducer()
 	defer producer.Close()
 
 	ticker := time.NewTicker(fetchInterval)
