@@ -11,26 +11,16 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	lib "github.com/with-autro/autro-library"
 )
 
 const (
 	binanceKlineAPI = "https://api.binance.com/api/v3/klines"
 	maxRetries      = 5
 	retryDelay      = 5 * time.Second
-	fetchInterval   = 1 * time.Minute
 	candleLimit     = 300
+	fetchInterval   = 1 * time.Minute
 )
-
-type CandleData struct {
-	OpenTime                 int64
-	Open, High, Low, Close   string
-	Volume                   string
-	CloseTime                int64
-	QuoteAssetVolume         string
-	NumberOfTrades           int
-	TakerBuyBaseAssetVolume  string
-	TakerBuyQuoteAssetVolume string
-}
 
 var kafkaBroker string
 var kafkaTopic string
@@ -46,8 +36,8 @@ func init() {
 	}
 }
 
-func fetchBTCCandleData() ([]CandleData, error) {
-	url := fmt.Sprintf("%s?symbol=BTCUSDT&interval=1m&limit=%d", binanceKlineAPI, candleLimit)
+func fetchBTCCandleData(url string) ([]lib.CandleData, error) {
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -65,9 +55,9 @@ func fetchBTCCandleData() ([]CandleData, error) {
 		return nil, err
 	}
 
-	candles := make([]CandleData, len(klines))
+	candles := make([]lib.CandleData, len(klines))
 	for i, kline := range klines {
-		candles[i] = CandleData{
+		candles[i] = lib.CandleData{
 			OpenTime:  int64(kline[0].(float64)),
 			Open:      kline[1].(string),
 			High:      kline[2].(string),
@@ -81,7 +71,7 @@ func fetchBTCCandleData() ([]CandleData, error) {
 	return candles, nil
 }
 
-func writeToKafka(writer *kafka.Writer, candles []CandleData) error {
+func writeToKafka(writer *kafka.Writer, candles []lib.CandleData) error {
 	jsonData, err := json.Marshal(candles)
 	if err != nil {
 		return err
@@ -112,20 +102,44 @@ func utcToLocal(utcTime time.Time) time.Time {
 	return utcTime.In(loc)
 }
 
+// / 다음 fetch 시간 구하는 함수
+func nextIntervalStart(now time.Time, interval time.Duration) time.Time {
+	return now.Truncate(interval).Add(interval)
+}
+
+// / 시간 반복에 따른 url에 넣을 String 반환 함수
+func getIntervalString(interval time.Duration) string {
+	switch interval {
+	case 1 * time.Minute:
+		return "1m"
+	case 15 * time.Minute:
+		return "15m"
+	case 1 * time.Hour:
+		return "1h"
+	default:
+		return "15m"
+	}
+}
+
 func main() {
 	writer := createWriter()
 	defer writer.Close()
-
-	ticker := time.NewTicker(fetchInterval)
-	defer ticker.Stop()
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
 
 	for {
+		now := time.Now()
+		nextFetch := nextIntervalStart(now, fetchInterval)
+		sleepDuration := nextFetch.Sub(now)
+
+		fmt.Printf("Waiting for %v untill next fetch at %v\n", sleepDuration.Round(time.Second), nextFetch.Format("2006-01-02 15:04:05"))
+
 		select {
-		case <-ticker.C:
-			candles, err := fetchBTCCandleData()
+		case <-time.After(sleepDuration):
+			url := fmt.Sprintf("%s?symbol=BTCUSDT&interval=%s&limit=%d", binanceKlineAPI, getIntervalString(sleepDuration), candleLimit)
+
+			candles, err := fetchBTCCandleData(url)
 			if err != nil {
 				fmt.Printf("Error fetching candle data: %v\n", err)
 				continue
