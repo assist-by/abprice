@@ -1,4 +1,4 @@
-module github.com/Lux-N-Sal/autro-price
+module github.com/with-autro/autro-price
 
 go 1.22.5
 

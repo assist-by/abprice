@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package price;
+
+option go_package = "github.com/with-autro/autro-price/proto";
+
+service PriceService {
+  rpc Start(StartRequest) returns (StartResponse) {}
+}
+
+message StartRequest {}
+
+message StartResponse {
+  string message = 1;
+}
