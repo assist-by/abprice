@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,8 +28,12 @@ const (
 	fetchInterval   = 1 * time.Minute
 )
 
-var kafkaBroker string
-var kafkaTopic string
+var (
+	kafkaBroker string
+	kafkaTopic  string
+	host        string
+	port        string
+)
 
 type server struct {
 	pb.UnimplementedPriceServiceServer
@@ -45,6 +50,45 @@ func init() {
 	if kafkaTopic == "" {
 		kafkaTopic = "price-to-signal" // 기본값 설정
 	}
+	host = os.Getenv("HOST")
+	if host == "" {
+		host = "localhost"
+	}
+
+	port := os.Getenv("GRPC_PORT")
+	if port == "" {
+		port = "50051"
+	}
+}
+
+// 서비스 디스커버리에 등록
+func registerService() {
+	service := lib.Service{
+		Name:    "autro-price",
+		Address: fmt.Sprintf("%s:%s", host, port),
+	}
+
+	jsonData, err := json.Marshal(service)
+	if err != nil {
+		log.Fatalf("Failed to marshal service data: %v", err)
+	}
+
+	serviceDiscoveryURL := os.Getenv("SERVICE_DISCOVERY_URL")
+	if serviceDiscoveryURL == "" {
+		serviceDiscoveryURL = "http://service-discovery:8500"
+	}
+
+	resp, err := http.Post(fmt.Sprintf("%s/register", serviceDiscoveryURL), "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("Failed to register service: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("Failed to register service. Status code: %d", resp.StatusCode)
+	}
+
+	log.Println("Service registered successfully")
 }
 
 // candle data fetch 함수
@@ -196,10 +240,7 @@ func (s *server) runPriceCollection() {
 }
 
 func main() {
-	port := os.Getenv("GRPC_PORT")
-	if port == "" {
-		port = "50051"
-	}
+	go registerService()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -216,6 +257,8 @@ func main() {
 		}
 	}()
 
+	// 인터럽트 기다리기
+	// gracefully shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 	<-sigChan
