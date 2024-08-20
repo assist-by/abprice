@@ -29,10 +29,11 @@ const (
 )
 
 var (
-	kafkaBroker string
-	kafkaTopic  string
-	host        string
-	port        string
+	kafkaBroker         string
+	kafkaTopic          string
+	host                string
+	port                string
+	serviceDiscoveryURL string
 )
 
 type server struct {
@@ -44,12 +45,14 @@ type server struct {
 func init() {
 	kafkaBroker = os.Getenv("KAFKA_BROKER")
 	if kafkaBroker == "" {
-		kafkaBroker = "kafka:9092" // 기본값 설정
+		kafkaBroker = "kafka:9092"
 	}
+
 	kafkaTopic = os.Getenv("KAFKA_TOPIC")
 	if kafkaTopic == "" {
-		kafkaTopic = "price-to-signal" // 기본값 설정
+		kafkaTopic = "price-to-signal"
 	}
+
 	host = os.Getenv("HOST")
 	if host == "" {
 		host = "localhost"
@@ -59,6 +62,13 @@ func init() {
 	if port == "" {
 		port = "50051"
 	}
+
+	serviceDiscoveryURL := os.Getenv("SERVICE_DISCOVERY_URL")
+	if serviceDiscoveryURL == "" {
+		serviceDiscoveryURL = "http://autro-service-discovery:8500"
+	}
+
+	log.Printf("Host: %s, Port: %s, Service Discovery URL: %s", host, port, serviceDiscoveryURL)
 }
 
 // 서비스 디스커버리에 등록
@@ -72,13 +82,8 @@ func registerService() {
 	if err != nil {
 		log.Fatalf("Failed to marshal service data: %v", err)
 	}
-
-	serviceDiscoveryURL := os.Getenv("SERVICE_DISCOVERY_URL")
-	if serviceDiscoveryURL == "" {
-		serviceDiscoveryURL = "http://service-discovery:8500"
-	}
-
-	resp, err := http.Post(fmt.Sprintf("%s/register", serviceDiscoveryURL), "application/json", bytes.NewBuffer(jsonData))
+	registerURL := fmt.Sprintf("%s/register", serviceDiscoveryURL)
+	resp, err := http.Post(registerURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Fatalf("Failed to register service: %v", err)
 	}
@@ -240,7 +245,10 @@ func (s *server) runPriceCollection() {
 }
 
 func main() {
-	go registerService()
+	port := os.Getenv("GRPC_PORT")
+	if port == "" {
+		port = "50051"
+	}
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -251,11 +259,13 @@ func main() {
 	pb.RegisterPriceServiceServer(s, &server{})
 
 	go func() {
-		log.Printf("autro-price service listening on : %s", port)
+		log.Printf("autro-price service listening on %s:%s", host, port)
 		if err := s.Serve(lis); err != nil {
 			log.Fatalf("Failed to serve: %v", err)
 		}
 	}()
+
+	go registerService()
 
 	// 인터럽트 기다리기
 	// gracefully shutdown
