@@ -1,23 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 	lib "github.com/with-autro/autro-library"
-	pb "github.com/with-autro/autro-price/proto"
-	"google.golang.org/grpc"
 )
 
 const (
@@ -28,75 +22,20 @@ const (
 	fetchInterval   = 1 * time.Minute
 )
 
-var (
-	kafkaBroker         string
-	kafkaTopic          string
-	host                string
-	port                string
-	serviceDiscoveryURL string
-)
-
-type server struct {
-	pb.UnimplementedPriceServiceServer
-	startOnce sync.Once
-	stopChan  chan struct{}
-}
+var kafkaBroker string
+var kafkaTopic string
 
 func init() {
 	kafkaBroker = os.Getenv("KAFKA_BROKER")
 	if kafkaBroker == "" {
-		kafkaBroker = "kafka:9092"
+		kafkaBroker = "kafka:9092" // 기본값 설정
 	}
-
 	kafkaTopic = os.Getenv("KAFKA_TOPIC")
 	if kafkaTopic == "" {
-		kafkaTopic = "price-to-signal"
+		kafkaTopic = "price-to-signal" // 기본값 설정
 	}
-
-	host = os.Getenv("HOST")
-	if host == "" {
-		host = "localhost"
-	}
-
-	port := os.Getenv("GRPC_PORT")
-	if port == "" {
-		port = "50051"
-	}
-
-	serviceDiscoveryURL := os.Getenv("SERVICE_DISCOVERY_URL")
-	if serviceDiscoveryURL == "" {
-		serviceDiscoveryURL = "http://autro-service-discovery:8500"
-	}
-
-	log.Printf("Host: %s, Port: %s, Service Discovery URL: %s", host, port, serviceDiscoveryURL)
 }
 
-// 서비스 디스커버리에 등록
-func registerService() {
-	service := lib.Service{
-		Name:    "autro-price",
-		Address: fmt.Sprintf("%s:%s", host, port),
-	}
-
-	jsonData, err := json.Marshal(service)
-	if err != nil {
-		log.Fatalf("Failed to marshal service data: %v", err)
-	}
-	registerURL := fmt.Sprintf("%s/register", serviceDiscoveryURL)
-	resp, err := http.Post(registerURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Fatalf("Failed to register service: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Failed to register service. Status code: %d", resp.StatusCode)
-	}
-
-	log.Println("Service registered successfully")
-}
-
-// candle data fetch 함수
 func fetchBTCCandleData(url string) ([]lib.CandleData, error) {
 
 	resp, err := http.Get(url)
@@ -132,7 +71,6 @@ func fetchBTCCandleData(url string) ([]lib.CandleData, error) {
 	return candles, nil
 }
 
-// kafka에 producer 함수
 func writeToKafka(writer *kafka.Writer, candles []lib.CandleData) error {
 	jsonData, err := json.Marshal(candles)
 	if err != nil {
@@ -146,7 +84,6 @@ func writeToKafka(writer *kafka.Writer, candles []lib.CandleData) error {
 	return err
 }
 
-// create kafka producer 함수
 func createWriter() *kafka.Writer {
 	return kafka.NewWriter(
 		kafka.WriterConfig{
@@ -156,7 +93,6 @@ func createWriter() *kafka.Writer {
 		})
 }
 
-// 시간 변환함수
 func utcToLocal(utcTime time.Time) time.Time {
 	loc, err := time.LoadLocation("Asia/Seoul")
 	if err != nil {
@@ -185,94 +121,49 @@ func getIntervalString(interval time.Duration) string {
 	}
 }
 
-func (s *server) Start(ctx context.Context, req *pb.StartRequest) (*pb.StartResponse, error) {
-	var err error
-	s.startOnce.Do(func() {
-		s.stopChan = make(chan struct{})
-		go s.runPriceCollection()
-		err = nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-	return &pb.StartResponse{Message: "Price collection started"}, nil
-}
-
-func (s *server) runPriceCollection() {
+func main() {
 	writer := createWriter()
 	defer writer.Close()
 
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt)
+
 	for {
+		now := time.Now()
+		nextFetch := nextIntervalStart(now, fetchInterval)
+		sleepDuration := nextFetch.Sub(now)
+
+		fmt.Printf("Waiting for %v untill next fetch at %v\n", sleepDuration.Round(time.Second), nextFetch.Format("2006-01-02 15:04:05"))
+
 		select {
-		case <-s.stopChan:
-			log.Println("Stopping price collection")
-			return
-		default:
-			now := time.Now()
-			nextFetch := nextIntervalStart(now, fetchInterval)
-			sleepDuration := nextFetch.Sub(now)
-
-			log.Printf("Waiting for %v until next fetch at %v\n", sleepDuration.Round(time.Second), nextFetch.Format("2006-01-02 15:04:05"))
-
-			time.Sleep(sleepDuration)
-
+		case <-time.After(sleepDuration):
 			url := fmt.Sprintf("%s?symbol=BTCUSDT&interval=%s&limit=%d", binanceKlineAPI, getIntervalString(sleepDuration), candleLimit)
 
 			candles, err := fetchBTCCandleData(url)
 			if err != nil {
-				log.Printf("Error fetching candle data: %v\n", err)
+				fmt.Printf("Error fetching candle data: %v\n", err)
 				continue
 			}
 
 			err = writeToKafka(writer, candles)
 			if err != nil {
-				log.Printf("Error producing to Kafka: %v\n", err)
+				fmt.Printf("Error producing to Kafka: %v\n", err)
 			} else {
-				log.Printf("Successfully sent %d candle data to Kafka\n", len(candles))
+				fmt.Printf("Successfully sent %d candle data to Kafka\n", len(candles))
 				if len(candles) > 0 {
 					firstCandle := candles[0]
 					lastCandle := candles[len(candles)-1]
 					firstTime := utcToLocal(time.Unix(firstCandle.OpenTime/1000, 0))
 					lastTime := utcToLocal(time.Unix(lastCandle.CloseTime/1000, 0))
-					log.Printf("Data range (Local Time): %v to %v\n",
+					fmt.Printf("Data range (Local Time): %v to %v\n",
 						firstTime.Format("2006-01-02 15:04:05"),
 						lastTime.Format("2006-01-02 15:04:05"))
 				}
 			}
+
+		case <-signals:
+			fmt.Println("Interrupt received, shutting down...")
+			return
 		}
 	}
-}
-
-func main() {
-	port := os.Getenv("GRPC_PORT")
-	if port == "" {
-		port = "50051"
-	}
-
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
-	if err != nil {
-		log.Fatalf("Failed to listen : %v", err)
-	}
-
-	s := grpc.NewServer()
-	pb.RegisterPriceServiceServer(s, &server{})
-
-	go func() {
-		log.Printf("autro-price service listening on %s:%s", host, port)
-		if err := s.Serve(lis); err != nil {
-			log.Fatalf("Failed to serve: %v", err)
-		}
-	}()
-
-	go registerService()
-
-	// 인터럽트 기다리기
-	// gracefully shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
-	<-sigChan
-
-	log.Println("Shutting down gracefully")
-	s.GracefulStop()
 }
