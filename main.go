@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,11 +24,12 @@ const (
 )
 
 var (
-	kafkaBroker         string
-	kafkaTopic          string
-	serviceDiscoveryURL string
-	host                string
-	port                string
+	kafkaBroker string
+	kafkaTopic  string
+	// serviceDiscoveryURL string
+	host              string
+	port              string
+	registrationTopic string
 )
 
 func init() {
@@ -41,10 +41,10 @@ func init() {
 	if kafkaTopic == "" {
 		kafkaTopic = "price-to-signal" // 기본값 설정
 	}
-	serviceDiscoveryURL = os.Getenv("SERVICE_DISCOVERY_URL")
-	if serviceDiscoveryURL == "" {
-		serviceDiscoveryURL = "http://autro-service-discovery:8500"
-	}
+	// serviceDiscoveryURL = os.Getenv("SERVICE_DISCOVERY_URL")
+	// if serviceDiscoveryURL == "" {
+	// 	serviceDiscoveryURL = "http://autro-service-discovery:8500"
+	// }
 	host = os.Getenv("HOST")
 	if host == "" {
 		host = "autro-price"
@@ -53,6 +53,11 @@ func init() {
 	if port == "" {
 		port = "50051"
 	}
+	registrationTopic = os.Getenv("REGISTRATION_TOPIC")
+	if registrationTopic == "" {
+		registrationTopic = "service-registration"
+	}
+
 }
 
 func fetchBTCCandleData(url string) ([]lib.CandleData, error) {
@@ -140,39 +145,50 @@ func getIntervalString(interval time.Duration) string {
 	}
 }
 
-func registerService() error {
+// Service Discovery에 등록하는 함수
+func registerService(writer *kafka.Writer) error {
 
 	service := lib.Service{
 		Name:    "autro-price",
 		Address: fmt.Sprintf("%s:%s", host, port),
 	}
 
-	log.Printf("url: %s, host: %s, port: %s", serviceDiscoveryURL, host, port)
-
 	jsonData, err := json.Marshal(service)
 	if err != nil {
 		return fmt.Errorf("error marshaling service data: %v", err)
 	}
 
-	resp, err := http.Post(serviceDiscoveryURL+"/register", "application/json", bytes.NewBuffer(jsonData))
+	err = writer.WriteMessages(context.Background(), kafka.Message{
+		Key:   []byte(service.Name),
+		Value: jsonData,
+	})
+
 	if err != nil {
-		return fmt.Errorf("error sending registration request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("service registration failed with status: %s", resp.Status)
+		return fmt.Errorf("error sending registration message: %v", err)
 	}
 
-	log.Println("Service registered successfully")
+	log.Println("Service registration message sent successfully")
 	return nil
+}
+
+// 서비스 등록 카프카 producer 생성
+func createRegistrationWriter() *kafka.Writer {
+	return kafka.NewWriter(
+		kafka.WriterConfig{
+			Brokers:     []string{kafkaBroker},
+			Topic:       registrationTopic,
+			MaxAttempts: 5,
+		})
 }
 
 func main() {
 	writer := createWriter()
 	defer writer.Close()
 
-	if err := registerService(); err != nil {
+	registrationWriter := createRegistrationWriter()
+	defer registrationWriter.Close()
+
+	if err := registerService(registrationWriter); err != nil {
 		log.Printf("Failed to register service: %v\n", err)
 	}
 
