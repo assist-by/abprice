@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,8 +24,13 @@ const (
 	fetchInterval   = 1 * time.Minute
 )
 
-var kafkaBroker string
-var kafkaTopic string
+var (
+	kafkaBroker         string
+	kafkaTopic          string
+	serviceDiscoveryURL string
+	host                string
+	port                string
+)
 
 func init() {
 	kafkaBroker = os.Getenv("KAFKA_BROKER")
@@ -33,6 +40,18 @@ func init() {
 	kafkaTopic = os.Getenv("KAFKA_TOPIC")
 	if kafkaTopic == "" {
 		kafkaTopic = "price-to-signal" // 기본값 설정
+	}
+	serviceDiscoveryURL = os.Getenv("SERVICE_DISCOVERY_URL")
+	if serviceDiscoveryURL == "" {
+		serviceDiscoveryURL = "http://autro-service-discovery:8500"
+	}
+	host = os.Getenv("HOST")
+	if host == "" {
+		host = "autro-price"
+	}
+	port = os.Getenv("PORT")
+	if port == "" {
+		port = "50051"
 	}
 }
 
@@ -96,7 +115,7 @@ func createWriter() *kafka.Writer {
 func utcToLocal(utcTime time.Time) time.Time {
 	loc, err := time.LoadLocation("Asia/Seoul")
 	if err != nil {
-		fmt.Printf("Error loading location: %v\n", err)
+		log.Printf("Error loading location: %v\n", err)
 		return utcTime
 	}
 	return utcTime.In(loc)
@@ -121,9 +140,41 @@ func getIntervalString(interval time.Duration) string {
 	}
 }
 
+func registerService() error {
+
+	service := lib.Service{
+		Name:    "autro-price",
+		Address: fmt.Sprintf("%s:%s", host, port),
+	}
+
+	log.Printf("url: %s, host: %s, port: %s", serviceDiscoveryURL, host, port)
+
+	jsonData, err := json.Marshal(service)
+	if err != nil {
+		return fmt.Errorf("error marshaling service data: %v", err)
+	}
+
+	resp, err := http.Post(serviceDiscoveryURL+"/register", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("error sending registration request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("service registration failed with status: %s", resp.Status)
+	}
+
+	log.Println("Service registered successfully")
+	return nil
+}
+
 func main() {
 	writer := createWriter()
 	defer writer.Close()
+
+	if err := registerService(); err != nil {
+		log.Printf("Failed to register service: %v\n", err)
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
@@ -133,7 +184,7 @@ func main() {
 		nextFetch := nextIntervalStart(now, fetchInterval)
 		sleepDuration := nextFetch.Sub(now)
 
-		fmt.Printf("Waiting for %v untill next fetch at %v\n", sleepDuration.Round(time.Second), nextFetch.Format("2006-01-02 15:04:05"))
+		log.Printf("Waiting for %v untill next fetch at %v\n", sleepDuration.Round(time.Second), nextFetch.Format("2006-01-02 15:04:05"))
 
 		select {
 		case <-time.After(sleepDuration):
@@ -141,28 +192,28 @@ func main() {
 
 			candles, err := fetchBTCCandleData(url)
 			if err != nil {
-				fmt.Printf("Error fetching candle data: %v\n", err)
+				log.Printf("Error fetching candle data: %v\n", err)
 				continue
 			}
 
 			err = writeToKafka(writer, candles)
 			if err != nil {
-				fmt.Printf("Error producing to Kafka: %v\n", err)
+				log.Printf("Error producing to Kafka: %v\n", err)
 			} else {
-				fmt.Printf("Successfully sent %d candle data to Kafka\n", len(candles))
+				log.Printf("Successfully sent %d candle data to Kafka\n", len(candles))
 				if len(candles) > 0 {
 					firstCandle := candles[0]
 					lastCandle := candles[len(candles)-1]
 					firstTime := utcToLocal(time.Unix(firstCandle.OpenTime/1000, 0))
 					lastTime := utcToLocal(time.Unix(lastCandle.CloseTime/1000, 0))
-					fmt.Printf("Data range (Local Time): %v to %v\n",
+					log.Printf("Data range (Local Time): %v to %v\n",
 						firstTime.Format("2006-01-02 15:04:05"),
 						lastTime.Format("2006-01-02 15:04:05"))
 				}
 			}
 
 		case <-signals:
-			fmt.Println("Interrupt received, shutting down...")
+			log.Println("Interrupt received, shutting down...")
 			return
 		}
 	}
