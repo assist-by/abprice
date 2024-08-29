@@ -24,9 +24,8 @@ const (
 )
 
 var (
-	kafkaBroker string
-	kafkaTopic  string
-	// serviceDiscoveryURL string
+	kafkaBroker       string
+	kafkaTopic        string
 	host              string
 	port              string
 	registrationTopic string
@@ -41,10 +40,6 @@ func init() {
 	if kafkaTopic == "" {
 		kafkaTopic = "price-to-signal" // 기본값 설정
 	}
-	// serviceDiscoveryURL = os.Getenv("SERVICE_DISCOVERY_URL")
-	// if serviceDiscoveryURL == "" {
-	// 	serviceDiscoveryURL = "http://autro-service-discovery:8500"
-	// }
 	host = os.Getenv("HOST")
 	if host == "" {
 		host = "autro-price"
@@ -60,8 +55,8 @@ func init() {
 
 }
 
+// 캔들 데이터 패치
 func fetchBTCCandleData(url string) ([]lib.CandleData, error) {
-
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -147,7 +142,6 @@ func getIntervalString(interval time.Duration) string {
 
 // Service Discovery에 등록하는 함수
 func registerService(writer *kafka.Writer) error {
-
 	service := lib.Service{
 		Name:    "autro-price",
 		Address: fmt.Sprintf("%s:%s", host, port),
