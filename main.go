@@ -33,6 +33,10 @@ var (
 	registrationTopic string
 	isRunning         bool
 	runningMutex      sync.Mutex
+	serviceCtx        context.Context
+	serviceCtxCancel  context.CancelFunc
+	kafkaWriter       *kafka.Writer
+	writerMutex       sync.Mutex
 )
 
 func init() {
@@ -56,7 +60,32 @@ func init() {
 	if registrationTopic == "" {
 		registrationTopic = "service-registration"
 	}
+	serviceCtx, serviceCtxCancel = context.WithCancel(context.Background())
 
+}
+
+func initKafkaWriter() error {
+	writerMutex.Lock()
+	defer writerMutex.Unlock()
+
+	if kafkaWriter == nil {
+		kafkaWriter = kafka.NewWriter(kafka.WriterConfig{
+			Brokers:     []string{kafkaBroker},
+			Topic:       kafkaTopic,
+			MaxAttempts: 5,
+		})
+	}
+	return nil
+}
+
+func closeKafkaWriter() {
+	writerMutex.Lock()
+	defer writerMutex.Unlock()
+
+	if kafkaWriter != nil {
+		kafkaWriter.Close()
+		kafkaWriter = nil
+	}
 }
 
 // 캔들 데이터 패치
@@ -94,17 +123,20 @@ func fetchBTCCandleData(url string) ([]lib.CandleData, error) {
 	return candles, nil
 }
 
-func writeToKafka(writer *kafka.Writer, candles []lib.CandleData) error {
+func writeToKafka(ctx context.Context, candles []lib.CandleData) error {
+	writerMutex.Lock()
+	defer writerMutex.Unlock()
+
+	if kafkaWriter == nil {
+		return fmt.Errorf("Kafka writer is not initialized")
+	}
+
 	jsonData, err := json.Marshal(candles)
 	if err != nil {
 		return err
 	}
 
-	err = writer.WriteMessages(context.Background(), kafka.Message{
-		Value: jsonData,
-	})
-
-	return err
+	return kafkaWriter.WriteMessages(ctx, kafka.Message{Value: jsonData})
 }
 
 func createWriter() *kafka.Writer {
@@ -179,22 +211,21 @@ func createRegistrationWriter() *kafka.Writer {
 		})
 }
 
-func startService(ctx context.Context, writer *kafka.Writer) {
+// 서비스 시작 함수
+func startService(ctx context.Context) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt)
+
 	for {
+		now := time.Now()
+		nextFetch := nextIntervalStart(now, fetchInterval)
+		sleepDuration := nextFetch.Sub(now)
+
+		log.Printf("Waiting for %v until next fetch at %v\n", sleepDuration.Round(time.Second), nextFetch.Format("2006-01-02 15:04:05"))
+
 		select {
-		case <-ctx.Done():
-			log.Println("Stopping price collection...")
-			return
-		default:
-			now := time.Now()
-			nextFetch := nextIntervalStart(now, fetchInterval)
-			sleepDuration := nextFetch.Sub(now)
-
-			log.Printf("Waiting for %v until next fetch at %v\n", sleepDuration.Round(time.Second), nextFetch.Format("2006-01-02 15:04:05"))
-
-			time.Sleep(sleepDuration)
-
-			url := fmt.Sprintf("%s?symbol=BTCUSDT&interval=%s&limit=%d", binanceKlineAPI, getIntervalString(fetchInterval), candleLimit)
+		case <-time.After(sleepDuration):
+			url := fmt.Sprintf("%s?symbol=BTCUSDT&interval=%s&limit=%d", binanceKlineAPI, getIntervalString(sleepDuration), candleLimit)
 
 			candles, err := fetchBTCCandleData(url)
 			if err != nil {
@@ -202,7 +233,7 @@ func startService(ctx context.Context, writer *kafka.Writer) {
 				continue
 			}
 
-			err = writeToKafka(writer, candles)
+			err = writeToKafka(ctx, candles)
 			if err != nil {
 				log.Printf("Error producing to Kafka: %v\n", err)
 			} else {
@@ -217,6 +248,14 @@ func startService(ctx context.Context, writer *kafka.Writer) {
 						lastTime.Format("2006-01-02 15:04:05"))
 				}
 			}
+
+		case <-signals:
+			log.Println("Interrupt received, shutting down...")
+			return
+
+		case <-ctx.Done():
+			log.Println("Context cancelled, shutting down...")
+			return
 		}
 	}
 }
@@ -232,9 +271,14 @@ func startHandler(c *gin.Context) {
 		return
 	}
 
-	isRunning = true
+	err := initKafkaWriter()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to initialize Kafka writer: %v", err)})
+		return
+	}
 
-	go startService(c.Request.Context(), createWriter())
+	isRunning = true
+	go startService(serviceCtx)
 	c.JSON(http.StatusOK, gin.H{"message": "autro-price started successfully"})
 }
 
@@ -247,8 +291,11 @@ func stopHandler(c *gin.Context) {
 
 	if !isRunning {
 		c.JSON(http.StatusOK, gin.H{"message": "autro-price is not running"})
+		return
 	}
 
+	serviceCtxCancel() // 서비스 컨텍스트 취소
+	closeKafkaWriter() // Kafka writer 닫기
 	isRunning = false
 	c.JSON(http.StatusOK, gin.H{"message": "autro-price stopped successfully"})
 }
@@ -287,6 +334,8 @@ func main() {
 		Handler: router,
 	}
 
+	defer closeKafkaWriter()
+
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server : %v", err)
@@ -300,6 +349,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Server forced to shutdown:", err)
 	}
