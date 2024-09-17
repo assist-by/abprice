@@ -1,11 +1,11 @@
-module github.com/with-autro/autro-price
+module github.com/assist-by/autro-price
 
 go 1.22.5
 
 require (
+	github.com/assist-by/autro-library v0.1.9
 	github.com/gin-gonic/gin v1.10.0
 	github.com/segmentio/kafka-go v0.4.47
-	github.com/with-autro/autro-library v0.1.7
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
 )

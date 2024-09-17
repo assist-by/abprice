@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	lib "github.com/assist-by/autro-library"
 	"github.com/gin-gonic/gin"
 	"github.com/segmentio/kafka-go"
-	lib "github.com/with-autro/autro-library"
 )
 
 const (
