@@ -1,4 +1,4 @@
-module github.com/assist-by/autro-price
+module github.com/assist-by/abprice
 
 go 1.22.5
 

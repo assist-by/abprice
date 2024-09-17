@@ -50,7 +50,7 @@ func init() {
 	}
 	host = os.Getenv("HOST")
 	if host == "" {
-		host = "autro-price"
+		host = "abprice"
 	}
 	port = os.Getenv("PORT")
 	if port == "" {
@@ -128,7 +128,7 @@ func writeToKafka(ctx context.Context, candles []lib.CandleData) error {
 	defer writerMutex.Unlock()
 
 	if kafkaWriter == nil {
-		return fmt.Errorf("Kafka writer is not initialized")
+		return fmt.Errorf("kafka writer is not initialized")
 	}
 
 	jsonData, err := json.Marshal(candles)
@@ -179,7 +179,7 @@ func getIntervalString(interval time.Duration) string {
 // Service Discovery에 등록하는 함수
 func registerService(writer *kafka.Writer) error {
 	service := lib.Service{
-		Name:    "autro-price",
+		Name:    "abprice",
 		Address: fmt.Sprintf("%s:%s", host, port),
 	}
 
@@ -267,7 +267,7 @@ func startHandler(c *gin.Context) {
 	defer runningMutex.Unlock()
 
 	if isRunning {
-		c.JSON(http.StatusOK, gin.H{"message": "autro-price is already running"})
+		c.JSON(http.StatusOK, gin.H{"message": "abprice is already running"})
 		return
 	}
 
@@ -279,7 +279,7 @@ func startHandler(c *gin.Context) {
 
 	isRunning = true
 	go startService(serviceCtx)
-	c.JSON(http.StatusOK, gin.H{"message": "autro-price started successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "abprice started successfully"})
 }
 
 // POST
@@ -290,14 +290,14 @@ func stopHandler(c *gin.Context) {
 	defer runningMutex.Unlock()
 
 	if !isRunning {
-		c.JSON(http.StatusOK, gin.H{"message": "autro-price is not running"})
+		c.JSON(http.StatusOK, gin.H{"message": "abprice is not running"})
 		return
 	}
 
 	serviceCtxCancel() // 서비스 컨텍스트 취소
 	closeKafkaWriter() // Kafka writer 닫기
 	isRunning = false
-	c.JSON(http.StatusOK, gin.H{"message": "autro-price stopped successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "abprice stopped successfully"})
 }
 
 // GET
