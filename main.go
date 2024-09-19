@@ -22,7 +22,7 @@ const (
 	maxRetries      = 5
 	retryDelay      = 5 * time.Second
 	candleLimit     = 300
-	fetchInterval   = 1 * time.Minute
+	fetchInterval   = 15 * time.Minute
 )
 
 var (
