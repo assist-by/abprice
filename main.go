@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	lib "github.com/assist-by/autro-library"
+	lib "github.com/assist-by/libStruct"
 	"github.com/gin-gonic/gin"
 	"github.com/segmentio/kafka-go"
 )

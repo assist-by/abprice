@@ -1,5 +1,5 @@
-github.com/assist-by/autro-library v0.1.9 h1:dnhRHPIgzb9sIx2DtIXCXVM1S7rWMD+Ve7GTYR7VwZA=
-github.com/assist-by/autro-library v0.1.9/go.mod h1:kEleJaU7UD39uMutrK3kfXecbCNeCPSJbdYZ0PS4Ub4=
+github.com/assist-by/libStruct v0.1.18 h1:XlCD/1RflRwTDdVn9LzEZ5/xPKsuMirbisFJvwobipE=
+github.com/assist-by/libStruct v0.1.18/go.mod h1:m2xSaOACiKibwSn3Hd9sPdJTm0V2Rpoa7/r5y91CbhM=
 github.com/bytedance/sonic v1.11.6 h1:oUp34TzMlL+OY1OUWxHqsdkgC/Zfc85zGqw9siXjrc0=
 github.com/bytedance/sonic v1.11.6/go.mod h1:LysEHSvpvDySVdC2f87zGWf6CIKJcAvqab1ZaiQtds4=
 github.com/bytedance/sonic/loader v0.1.1 h1:c+e5Pt1k/cy5wMveRDyk2X4B9hF4g7an8N3zCYjJFNM=
